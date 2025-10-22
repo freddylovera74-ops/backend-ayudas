@@ -1,11 +1,20 @@
 const express = require('express');
 const cors = require('cors');
-// ¡Lee la clave secreta desde las variables de entorno de Render!
+// ¡Importa Stripe con tu NUEVA clave secreta!
 const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-app.use(cors());
+// -----------------------------------------------------------------
+// ¡¡AQUÍ ESTÁ LA CORRECCIÓN!!
+// -----------------------------------------------------------------
+// Configuración de CORS para permitir SÓLO a tu web de Netlify
+const corsOptions = {
+  origin: 'https://zippy-stardust-f6d467.netlify.app'
+};
+app.use(cors(corsOptions));
+// -----------------------------------------------------------------
+
 app.use(express.json());
 
 // -----------------------------------------------------------------
@@ -59,7 +68,6 @@ app.post('/api/diagnostico/alquiler', (req, res) => {
 
 // -----------------------------------------------------------------
 // LÓGICA DEL SIMULADOR DE PAGO: INGRESO MÍNIMO VITAL (IMV)
-// (Todo esto se queda exactamente igual que antes)
 // -----------------------------------------------------------------
 const RENTAS_GARANTIZADAS_MENSUALES = {
     '1a0m': 604.21, '1a1m': 869.95, '1a2m': 1135.69, '1a3m': 1401.43, '1a4m': 1667.17,
@@ -192,3 +200,4 @@ app.listen(PORT, () => {
     console.log('  POST /api/crear-sesion-de-pago (Simulador IMV PAGO)');
     console.log('  POST /api/verificar-pago-y-obtener-resultado (Simulador IMV PAGO)');
 });
+
