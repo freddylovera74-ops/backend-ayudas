@@ -1,19 +1,65 @@
-// --- server.js (Completo y Nivel Experto con Stripe) ---
-
 const express = require('express');
 const cors = require('cors');
-// ¡Importa Stripe con tu NUEVA clave secreta!
-// Pon tu clave secreta directamente aquí o, mejor, usa variables de entorno (.env)
+// ¡Lee la clave secreta desde las variables de entorno de Render!
 const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
 const app = express();
-const PORT = process.env.PORT || 3000; // Preparado para despliegue
+const PORT = process.env.PORT || 3000;
 
 app.use(cors());
 app.use(express.json());
 
 // -----------------------------------------------------------------
-// TABLAS OFICIALES DE RENTA GARANTIZADA Y PATRIMONIO (IMV 2024-2025)
-// (Estas tablas las dejamos como estaban)
+// LÓGICA DEL SIMULADOR GRATUITO: BONO ALQUILER JOVEN (MADRID)
+// -----------------------------------------------------------------
+const REQUISITOS_ALQUILER = {
+    EDAD_MAX: 35,
+    EDAD_MIN: 18,
+    INGRESOS_MAX_ANUAL: 25200, // 3 veces el IPREM (8400€ * 3)
+    ALQUILER_MAX_MADRID: 900,  // Límite para Madrid
+    PROPIETARIO: 'no'
+};
+
+app.post('/api/diagnostico/alquiler', (req, res) => {
+    console.log('RECIBIDA PETICIÓN ALQUILER:', req.body);
+    const { edad, ingresos, precioAlquiler, propietario } = req.body;
+
+    const numEdad = parseInt(edad);
+    const numIngresos = parseFloat(ingresos);
+    const numAlquiler = parseFloat(precioAlquiler);
+
+    const documentos = [
+        "DNI o NIE (residencia legal en España).",
+        "Contrato de alquiler (debes ser el titular).",
+        "Justificante de empadronamiento en la vivienda.",
+        "Justificante de ingresos (nóminas, declaración de renta).",
+        "Nota simple del registro (para acreditar que no tienes propiedades)."
+    ];
+
+    if (numEdad > REQUISITOS_ALQUILER.EDAD_MAX || numEdad < REQUISITOS_ALQUILER.EDAD_MIN) {
+        return res.json({ elegible: false, motivo: `La ayuda es para jóvenes entre ${REQUISITOS_ALQUILER.EDAD_MIN} y ${REQUISITOS_ALQUILER.EDAD_MAX} años.` });
+    }
+    if (numIngresos > REQUISITOS_ALQUILER.INGRESOS_MAX_ANUAL) {
+        return res.json({ elegible: false, motivo: `Tus ingresos anuales (${numIngresos}€) superan el límite de ${REQUISITOS_ALQUILER.INGRESOS_MAX_ANUAL}€ (3 veces el IPREM).` });
+    }
+    if (numAlquiler > REQUISITOS_ALQUILER.ALQUILER_MAX_MADRID) {
+        return res.json({ elegible: false, motivo: `El precio de tu alquiler (${numAlquiler}€) supera el límite de ${REQUISITOS_ALQUILER.ALQUILER_MAX_MADRID}€ permitido en Madrid.` });
+    }
+    if (propietario !== REQUISITOS_ALQUILER.PROPIETARIO) {
+        return res.json({ elegible: false, motivo: `No puedes ser propietario de otra vivienda en España.` });
+    }
+
+    // ¡ÉXITO!
+    return res.json({
+        elegible: true,
+        motivo: `¡Cumples los requisitos principales! Tienes menos de 35, tus ingresos y el precio del alquiler están dentro de los límites.`,
+        documentos: documentos
+    });
+});
+
+
+// -----------------------------------------------------------------
+// LÓGICA DEL SIMULADOR DE PAGO: INGRESO MÍNIMO VITAL (IMV)
+// (Todo esto se queda exactamente igual que antes)
 // -----------------------------------------------------------------
 const RENTAS_GARANTIZADAS_MENSUALES = {
     '1a0m': 604.21, '1a1m': 869.95, '1a2m': 1135.69, '1a3m': 1401.43, '1a4m': 1667.17,
@@ -29,8 +75,6 @@ const LIMITES_PATRIMONIO_ANUAL = {
     '3a0m': 44777.96, '3a1m': 56990.13, '3a2m': 69202.30, '4a0m': 56990.13,
     '4a1m': 69202.30, 'mas': 69202.30,
 };
-
-// --- Función Helper para obtener la clave (igual que antes) ---
 function getClaveHogar(adultos, menores, esMonoparental) {
     const totalMiembros = adultos + menores;
     let claveRenta = esMonoparental === 'si' ? 'mono_' : '';
@@ -40,13 +84,8 @@ function getClaveHogar(adultos, menores, esMonoparental) {
     if (esMonoparental === 'si' && menores === 0) { claveRenta = `${adultos}a0m`; }
     return { claveRenta, clavePatrimonio };
 }
-
-// ---------------------------------------------------
-// --- MOTOR DE CÁLCULO IMV (REUTILIZABLE) ---
-// ---------------------------------------------------
 function calcularDiagnosticoIMV(formData) {
     const { edad, residencia, adultos, menores, monoparental, ingresosHogar, patrimonioHogar } = formData;
-
     const numAdultos = parseInt(adultos);
     const numMenores = parseInt(menores);
     const numIngresos = parseFloat(ingresosHogar);
@@ -59,31 +98,25 @@ function calcularDiagnosticoIMV(formData) {
         "Certificado de titularidad de la cuenta bancaria.",
         "Sentencia de divorcio o convenio regulador (si aplica)."
     ];
-
     if (parseInt(residencia) < 1) {
         return { elegible: false, motivo: 'No cumples el requisito de residencia (mínimo 1 año de residencia legal en España).', documentos: [] };
     }
     if (parseInt(edad) < 23 && numMenores === 0) {
         return { elegible: false, motivo: 'Debes ser mayor de 23 años (o mayor de 18 con menores a tu cargo).', documentos: [] };
     }
-    
     const { claveRenta, clavePatrimonio } = getClaveHogar(numAdultos, numMenores, monoparental);
     const rentaGarantizada = RENTAS_GARANTIZADAS_MENSUALES[claveRenta] || RENTAS_GARANTIZADAS_MENSUALES[monoparental === 'si' ? 'mono_mas' : 'mas'];
     const limitePatrimonio = LIMITES_PATRIMONIO_ANUAL[clavePatrimonio] || LIMITES_PATRIMONIO_ANUAL['mas'];
-
     if (numPatrimonio >= limitePatrimonio) {
         return { elegible: false, motivo: `El patrimonio de tu hogar (${numPatrimonio.toFixed(2)} €) supera el límite para tu tipo de hogar (${limitePatrimonio.toFixed(2)} €).`, documentos: [] };
     }
-
     if (numIngresos >= rentaGarantizada) {
         return { elegible: false, motivo: `Los ingresos mensuales de tu hogar (${numIngresos.toFixed(2)} €) superan la Renta Garantizada para tu tipo de hogar (${rentaGarantizada.toFixed(2)} €).`, documentos: [] };
     }
-
     const cuantiaEstimada = rentaGarantizada - numIngresos;
     if (cuantiaEstimada < 10) {
         return { elegible: false, motivo: `La diferencia entre tus ingresos (${numIngresos.toFixed(2)} €) y la Renta Garantizada (${rentaGarantizada.toFixed(2)} €) es menor de 10€, que es el mínimo a percibir.`, documentos: [] };
     }
-
     return {
         elegible: true,
         motivo: `Tus ingresos (${numIngresos.toFixed(2)} €) son inferiores a la Renta Garantizada (${rentaGarantizada.toFixed(2)} €) y tu patrimonio está dentro del límite.`,
@@ -93,18 +126,16 @@ function calcularDiagnosticoIMV(formData) {
 }
 
 // ---------------------------------------------------
-// --- NUEVO ENDPOINT 1: Crear Sesión de Pago (Stripe) ---
+// --- ENDPOINT 1 (PAGO): Crear Sesión de Pago (Stripe) ---
 // ---------------------------------------------------
 app.post('/api/crear-sesion-de-pago', async (req, res) => {
     try {
         const formData = req.body;
-        
-        // ¡¡IMPORTANTE!! Definimos la URL de nuestra web en Netlify
-        // Cambia "zippy-stardust-f6d467.netlify.app" por tu URL real de Netlify
-        const YOUR_DOMAIN = 'https://zippy-stardust-f6d467.netlify.app'; // <-- CAMBIA ESTO POR TU URL
+        // ¡¡RECUERDA CAMBIAR ESTO POR TU URL REAL DE NETLIFY!!
+        const YOUR_DOMAIN = 'https://zippy-stardust-f6d467.netlify.app';
 
         const session = await stripe.checkout.sessions.create({
-            payment_method_types: ['card', 'paypal', 'ideal'], // Añade métodos de pago
+            payment_method_types: ['card'],
             line_items: [
                 {
                     price_data: {
@@ -119,16 +150,13 @@ app.post('/api/crear-sesion-de-pago', async (req, res) => {
                 },
             ],
             mode: 'payment',
-            // ¡Magia! Guardamos los datos del formulario en Stripe
             metadata: {
                 formData: JSON.stringify(formData)
             },
             success_url: `${YOUR_DOMAIN}/pago-exitoso.html?session_id={CHECKOUT_SESSION_ID}`,
             cancel_url: `${YOUR_DOMAIN}/pago-cancelado.html`,
         });
-
         res.json({ id: session.id });
-
     } catch (error) {
         console.error("Error al crear sesión de Stripe:", error);
         res.status(500).json({ error: 'Error al crear la sesión de pago.' });
@@ -136,44 +164,31 @@ app.post('/api/crear-sesion-de-pago', async (req, res) => {
 });
 
 // ---------------------------------------------------
-// --- NUEVO ENDPOINT 2: Verificar Pago y dar Resultado ---
+// --- ENDPOINT 2 (PAGO): Verificar Pago y dar Resultado ---
 // ---------------------------------------------------
 app.post('/api/verificar-pago-y-obtener-resultado', async (req, res) => {
     try {
         const { sessionId } = req.body;
-
-        // Pedimos a Stripe la sesión
         const session = await stripe.checkout.sessions.retrieve(sessionId);
 
-        // Verificamos que esté pagada
         if (session.payment_status === 'paid') {
-            
-            // Recuperamos los datos del formulario que guardamos
             const formData = JSON.parse(session.metadata.formData);
-
-            // ¡Calculamos el resultado AHORA!
             const resultado = calcularDiagnosticoIMV(formData);
-
-            // Enviamos el resultado final al frontend
             res.json(resultado);
-
         } else {
             res.status(400).json({ error: 'El pago no ha sido completado.' });
         }
-
     } catch (error) {
         console.error("Error al verificar la sesión:", error);
         res.status(500).json({ error: 'Error al verificar el pago.' });
     }
 });
 
-// Endpoint simple (lo dejamos por si acaso)
-app.post('/api/diagnostico', (req, res) => {
-    console.log('Datos recibidos en el endpoint SIMPLE:', req.body);
-    res.json({ status: 'Éxito', message: 'Datos recibidos en endpoint simple.' });
-});
-
 // 5. Poner el servidor a escuchar
 app.listen(PORT, () => {
     console.log(`🚀 Servidor EXPERTO (con Stripe) escuchando en http://localhost:${PORT}`);
+    console.log('Endpoints disponibles:');
+    console.log('  POST /api/diagnostico/alquiler (Simulador Alquiler GRATIS)');
+    console.log('  POST /api/crear-sesion-de-pago (Simulador IMV PAGO)');
+    console.log('  POST /api/verificar-pago-y-obtener-resultado (Simulador IMV PAGO)');
 });
